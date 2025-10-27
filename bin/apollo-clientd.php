@@ -17,11 +17,20 @@ if(!Helpers\is_cli_mode()) {
 class App {
     const VERSION = '1.0.0';//当前版本
 
+    /**
+     * @var Client
+     */
     private $apolloSdkClient;
     private $quiet = false;
     private $saveConfigDir = '';
     private $appNamespaceList = [];
     private $appNamespaceListPortal = 'application';
+
+    /**
+     * app_id首次启动
+     * @var array
+     */
+    private $is_first_start_up = [];
 
     public function __construct() {
         //初始化基础参数
@@ -49,7 +58,7 @@ class App {
             $response = $guzzleHttpClient->get($server);
             $statusCode = (int)$response->getStatusCode();
             if($statusCode !== 404) {
-                $errorMsg = "http状态码为{$statusCode}，配置中心根接口的状态码应该为404，请检查阿波罗配置中心链接";
+//                $errorMsg = "http状态码为{$statusCode}，配置中心根接口的状态码应该为404，请检查阿波罗配置中心链接";
             } else {
                 $jsonDecodeBody = [];
                 $body = (string)$response->getBody();
@@ -64,7 +73,7 @@ class App {
             $errorMsg = $e->getMessage();
         }
         if(!empty($errorMsg)) {
-            $this->outputErrorMsg("通过curl请求{$this->server}时产生错误，错误信息如下：".PHP_EOL.$errorMsg.PHP_EOL);
+            $this->outputErrorMsg("通过curl请求{$server}时产生错误，错误信息如下：".PHP_EOL.$errorMsg.PHP_EOL);
         }
     }
 
@@ -138,7 +147,7 @@ EOF;
         }
         //检查配置中心地址
         if(!isset($opt['skip-check-server'])) {
-            $this->checkServer($opt['server']);
+//            $this->checkServer($opt['server']);
         }
         //初始化\ApolloSdk\Config\Client配置
         $config = ['config_server_url' => $opt['server']];
@@ -322,6 +331,13 @@ EOF;
                 $this->outputDebugMsg("【".date('Y-m-d H:i:s')."】应用id：{$appId}的namespace：{$namespaceName}发生了配置变化");
                 //更新了入口namespace，需要同时更新映射数组
                 if($namespaceName === $this->appNamespaceListPortal) {
+                    if (isset($this->is_first_start_up[$appId]) && !$this->is_first_start_up[$appId]){
+                        $this->outputDebugMsg("【".date('Y-m-d H:i:s')."】应用id：{$appId}的入口namespace：{$namespaceName}发生了配置变化，进程重启");
+                        exit(0);
+                    }
+                    $this->is_first_start_up[$appId] = false;
+
+
                     $newMapping = [];
                     $namespaceData = $this->formatPortalConfigData($newConfig);
                     if(!empty($namespaceData)) {

@@ -55,10 +55,20 @@ class Storage {
         //生成相应的目录
         $dirname = dirname($fileName);
         if(!file_exists($dirname)) {
-            mkdir($dirname, 0755, true);
+            if (!mkdir($dirname, 0755, true) && !is_dir($dirname)) {
+                throw new \RuntimeException(sprintf('Directory "%s" was not created', $dirname));
+            }
         }
         //保存配置
-        return (bool)file_put_contents($fileName, $configData);
+        // 使用原子操作写入文件，避免并发读写问题
+        $tempFileName = $fileName . '.tmp.' . uniqid('',true);
+        $result = (bool)file_put_contents($tempFileName, $configData);
+        if ($result) {
+            rename($tempFileName, $fileName);
+        } else {
+            @unlink($tempFileName);
+        }
+        return $result;
     }
 
     /**
