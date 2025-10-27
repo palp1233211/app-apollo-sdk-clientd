@@ -1,5 +1,5 @@
 {
-    "name": "apollo-sdk/clientd",
+    "name": "app-apollo-sdk/clientd",
     "description": "complete implementation of Ctrip Apollo read configuration interface",
     "type": "library",
     "license": "MIT",
@@ -9,7 +9,7 @@
         "ctrip",
         "apollo-client"
     ],
-    "homepage": "https://github.com/fengzhibin/apollo-sdk-configd",
+    "homepage": "https://github.com/palp1233211/app-apollo-sdk-clientd",
     "require": {
         "apollo-sdk/config": "^1.0"
     },
