@@ -42,7 +42,7 @@ cli启动参数
 |参数|说明|默认值|
 |----|----|----|
 |--server|Apollo配置中心服务的地址| 无 |
-|--conf-portal| 读取额外参数配置的入口| 无 |
+|--conf-portal| 读取额外参数配置的入口，格式为appid/namespace，也兼容appid/namespace/key | 无 |
 |-h                        | 显示帮助信息                  |无|
 |--help                    | 同-h                        |无|
 |--q                       | 开启静默模式，屏蔽运行时日志    |无|
@@ -55,11 +55,22 @@ cli启动参数
 ## 关于--conf-portal参数说明
 --conf-portal参数用于将一些额外的参数（例如应用id，namespace信息等）保存在阿波罗配置中心，
 这样就不必在apollo-clientd启动时写死了，这也减少了apollo-clientd启动参数个数， 
-程序会在启动的时候到这配置入口去读取配置，这个参数格式为appid/namespace/key，以下图作为例子说明
+程序会在启动的时候到这配置入口去读取配置。使用appid/namespace两段格式时，程序自动
+根据服务IP选择配置；使用appid/namespace/key三段格式时，程序直接读取明确指定的key，
+不再根据服务IP改写。以下图作为例子说明：
 
 ![Screenshot](https://raw.githubusercontent.com/fengzhibin/apollo-sdk-clientd/master/images/extra.png)
 
-上图的参数为--conf-portal=apollo-sdk-clientd/hello_world/world
+上图明确指定key时，参数为--conf-portal=apollo-sdk-clientd/hello_world/world。
+
+程序会优先获取当前服务的非回环 IPv4 地址，并使用 IP 后两段作为配置 key。例如：
+`--conf-portal=app-apollo-clientd/apollo-clientd` 且当前服务 IP 为
+`192.168.7.71` 时，优先读取 `app-apollo-clientd/apollo-clientd/7.71`；如果无法获取
+服务 IP，或者 key `7.71` 不存在/为空，则自动回退读取
+`app-apollo-clientd/apollo-clientd/public`。
+
+如果传入三段格式，例如 `--conf-portal=app-apollo-clientd/apollo-clientd/custom`，
+则直接读取 key `custom`，不会读取 IP 对应的 key，也不会自动回退 `public`。
 
 ## 额外参数配置（json格式）
 ```json
@@ -119,4 +130,3 @@ defined('APOLLO_SDK_SAVE_CONFIG_DIR', $saveConfigDir);
 
 //然后业务代码就可以不需要传递这些已经定义好的常量了
 var_dump(\ApolloSdk\Helpers\get_config($key, '', $namespaceName);
-

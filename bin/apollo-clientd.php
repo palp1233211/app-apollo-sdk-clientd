@@ -89,7 +89,8 @@ Usage: php ./bin/apollo-clientd.php [options] -- [args...]
 
 必填参数：
 --server                      配置中心地址，格式例子：http://config-server.apollo.com
---conf-portal                 apollo-clientd的配置入口，格式为：应用id/namespace/key，格式例子：demo/test/apollo-clientd
+--conf-portal                 apollo-clientd的配置入口，格式为：应用id/namespace，格式例子：demo/test；
+                              也兼容应用id/namespace/key；两段自动按IP选key，三段直接使用指定key
                               
 可选参数：
 -h [--help]                   显示帮助信息
@@ -100,7 +101,7 @@ Usage: php ./bin/apollo-clientd.php [options] -- [args...]
 --skip-check-server           是否跳过自动检查server环节，默认启动时会请求server检查其是否为阿波罗配置中心，
                               启动时增加--skip-check-server参数可以跳过这个检查
 --conf-portal-separator       默认conf-portal参数的分隔符为/，通过这个参数可以改变conf-portal的分隔符，例如--conf-portal-separator=";"，
-                              这样--conf-portal就变成demo;test;clientd_config
+                              这样--conf-portal可以写成demo;test，也兼容demo;test;clientd_config
                                    
 更详细的使用说明参考：https://github.com/fengzhibin/apollo-sdk-clientd
 EOF;
@@ -181,18 +182,46 @@ EOF;
         }
         $confPortalSeparator = empty($opt['conf-portal-separator'])?'/':$opt['conf-portal-separator'];
         $confPortal = explode($confPortalSeparator, $opt['conf-portal']);
-        if(count($confPortal) !== 3) {
-            $this->outputErrorMsg("--conf-portal参数格式错误，正确的格式为： appid{$confPortalSeparator}namespace{$confPortalSeparator}key");
+        if(count($confPortal) < 2 || count($confPortal) > 3) {
+            $this->outputErrorMsg("--conf-portal参数格式错误，正确的格式为： appid{$confPortalSeparator}namespace[{$confPortalSeparator}key]");
         }
-        list($appId, $namespaceName, $key) = $confPortal;
+        $appId = $confPortal[0];
+        $namespaceName = $confPortal[1];
+        if($appId === '' || $namespaceName === '') {
+            $this->outputErrorMsg("--conf-portal参数中的appid和namespace不能为空");
+        }
         $tmp = $this->apolloSdkClient->getConfig($appId, $namespaceName);
-        if(empty($tmp[$key])) {
-            $this->outputErrorMsg("应用：{$appId}，namespace：{$namespaceName}下配置为空");
+
+        if(count($confPortal) === 3 && $confPortal[2] !== '') {
+            // 显式传入第三段时完全尊重指定 key，不再根据服务 IP 改写。
+            $selectedKey = $confPortal[2];
+            $this->outputDebugMsg("使用--conf-portal显式指定的配置key：{$selectedKey}");
+        } else {
+            // 只传 appid/namespace 时，使用当前服务 IPv4 地址的后两段作为配置 key。
+            // 例如服务 IP 为 192.168.7.71 时读取 key=7.71；无法识别 IP 或专属配置为空时回退 public。
+            $selectedKey = 'public';
+            $serverIp = $this->getServerIpv4Address();
+            if(!empty($serverIp)) {
+                $ipSegments = explode('.', $serverIp);
+                $ipKey = implode('.', array_slice($ipSegments, -2));
+                if(isset($tmp[$ipKey]) && $tmp[$ipKey] !== '') {
+                    $selectedKey = $ipKey;
+                    $this->outputDebugMsg("当前服务IP为{$serverIp}，使用专属配置key：{$selectedKey}");
+                } else {
+                    $this->outputDebugMsg("当前服务IP为{$serverIp}，未找到专属配置key：{$ipKey}，回退配置key：public");
+                }
+            } else {
+                $this->outputDebugMsg("未获取到当前服务IPv4地址，回退配置key：public");
+            }
         }
-        if(!Helpers\is_json($tmp[$key])) {
-            $this->outputErrorMsg("apollo-clientd运行配置必须为json格式");
+
+        if(!isset($tmp[$selectedKey]) || $tmp[$selectedKey] === '') {
+            $this->outputErrorMsg("应用：{$appId}，namespace：{$namespaceName}下配置key：{$selectedKey}为空");
         }
-        $config = json_decode($tmp[$key], true);
+        if(!Helpers\is_json($tmp[$selectedKey])) {
+            $this->outputErrorMsg("apollo-clientd运行配置key：{$selectedKey}必须为json格式");
+        }
+        $config = json_decode($tmp[$selectedKey], true);
         unset($tmp);
         if(empty($config['app_namespace_list'])) {
             $this->outputErrorMsg("apollo-clientd运行配置没有配置app_namespace_list参数");
@@ -205,6 +234,42 @@ EOF;
         if(!empty($config['app_namespace_list_portal'])) {
             $this->appNamespaceListPortal = $config['app_namespace_list_portal'];
         }
+    }
+
+    /**
+     * 获取当前服务可用的非回环 IPv4 地址。
+     *
+     * CLI 环境通常没有 SERVER_ADDR，因此同时通过主机名解析本机地址；过滤回环地址和
+     * APIPA 地址，避免错误地使用 127、0 或 169 作为 Apollo 专属配置 key。
+     *
+     * @return string
+     */
+    private function getServerIpv4Address() {
+        $ipCandidates = [];
+        if(!empty($_SERVER['SERVER_ADDR'])) {
+            $ipCandidates[] = $_SERVER['SERVER_ADDR'];
+        }
+
+        $hostName = gethostname();
+        if($hostName !== false) {
+            // 主机名未写入 DNS 或 /etc/hosts 时允许静默回退到 public，避免额外 warning 干扰守护进程日志。
+            $hostIpList = @gethostbynamel($hostName);
+            if(is_array($hostIpList)) {
+                $ipCandidates = array_merge($ipCandidates, $hostIpList);
+            }
+        }
+
+        foreach(array_unique($ipCandidates) as $ip) {
+            if(filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+                continue;
+            }
+            if(strpos($ip, '127.') === 0 || strpos($ip, '169.254.') === 0 || $ip === '0.0.0.0') {
+                continue;
+            }
+            return $ip;
+        }
+
+        return '';
     }
 
     /**
@@ -361,5 +426,3 @@ EOF;
 }
 
 (new App())->run();
-
-
